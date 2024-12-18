@@ -4,7 +4,7 @@
 instance_types_old=("c7a.16xlarge" "m7a.16xlarge")
 
 # Eski bölgeler
-regions_old=("us-east-1" "us-east-2" "eu-central-1" "eu-west-1")
+regions_old=("us-east-1" "us-east-2" "us-west-2" "eu-north-1" "eu-central-1")
 
 # Her bölge için AMI ID'lerini manuel olarak belirleyin
 declare -A ami_ids
