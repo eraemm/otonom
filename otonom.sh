@@ -24,30 +24,43 @@ success_regions=()
 log_file="spot_request_log.txt"
 echo "" > "$log_file"  # Log dosyasını sıfırlar
 
-# Güvenlik grubu oluşturma fonksiyonu
-create_security_group() {
+# Güvenlik grubu oluşturma veya kontrol etme fonksiyonu
+create_or_get_security_group() {
     local region=$1
 
-    echo "[$(date)] $region - Güvenlik grubu oluşturuluyor..." | tee -a "$log_file"
-    security_group_id=$(aws ec2 create-security-group \
-        --group-name "ec2-connect-sg" \
-        --description "Allow SSH access for EC2 Instance Connect" \
+    echo "[$(date)] $region - Güvenlik grubu kontrol ediliyor..." | tee -a "$log_file"
+    # Mevcut güvenlik grubunu kontrol et
+    security_group_id=$(aws ec2 describe-security-groups \
         --region "$region" \
-        --query 'GroupId' --output text 2>>"$log_file")
+        --query "SecurityGroups[?GroupName=='ec2-connect-sg'].GroupId | [0]" \
+        --output text 2>>"$log_file")
 
-    if [ -z "$security_group_id" ]; then
-        echo "[$(date)] $region - Güvenlik grubu oluşturulamadı!" | tee -a "$log_file"
-        return 1
+    if [ "$security_group_id" != "None" ] && [ -n "$security_group_id" ]; then
+        echo "[$(date)] $region - Mevcut güvenlik grubu bulundu: $security_group_id" | tee -a "$log_file"
+    else
+        echo "[$(date)] $region - Güvenlik grubu oluşturuluyor..." | tee -a "$log_file"
+        security_group_id=$(aws ec2 create-security-group \
+            --group-name "ec2-connect-sg" \
+            --description "Allow SSH access for EC2 Instance Connect" \
+            --region "$region" \
+            --query 'GroupId' --output text 2>>"$log_file")
+
+        if [ -z "$security_group_id" ]; then
+            echo "[$(date)] $region - Güvenlik grubu oluşturulamadı!" | tee -a "$log_file"
+            return 1
+        fi
+
+        # SSH bağlantısı için IPv4 üzerinden TCP 22 portunu aç
+        aws ec2 authorize-security-group-ingress \
+            --group-id "$security_group_id" \
+            --protocol tcp \
+            --port 22 \
+            --cidr 0.0.0.0/0 \
+            --region "$region" 2>>"$log_file"
+
+        echo "[$(date)] $region - Güvenlik grubu oluşturuldu ve SSH için kurallar eklendi: $security_group_id" | tee -a "$log_file"
     fi
 
-    aws ec2 authorize-security-group-ingress \
-        --group-id "$security_group_id" \
-        --protocol tcp \
-        --port 22 \
-        --cidr 0.0.0.0/0 \
-        --region "$region" 2>>"$log_file"
-
-    echo "[$(date)] $region - Güvenlik grubu oluşturuldu: $security_group_id" | tee -a "$log_file"
     echo "$security_group_id"
 }
 
@@ -64,10 +77,10 @@ create_spot_request() {
         return
     fi
 
-    # Güvenlik grubunu oluştur
-    security_group_id=$(create_security_group "$region")
+    # Güvenlik grubunu oluştur veya mevcut olanı al
+    security_group_id=$(create_or_get_security_group "$region")
     if [ -z "$security_group_id" ]; then
-        echo "[$(date)] $region - Güvenlik grubu oluşturulamadı." | tee -a "$log_file"
+        echo "[$(date)] $region - Güvenlik grubu alınamadı." | tee -a "$log_file"
         return
     fi
 
