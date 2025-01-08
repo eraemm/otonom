@@ -18,31 +18,36 @@ fi
 
 echo "VPC ID: $VPC_ID"
 
-# Güvenlik grubu oluşturma ve SSH portunu açma
+# Güvenlik grubu kontrolü veya oluşturulması
 SECURITY_GROUP_NAME="otonom-ssh-sg"
-SECURITY_GROUP_ID=$(aws ec2 create-security-group \
-  --group-name "$SECURITY_GROUP_NAME" \
-  --description "Security group with SSH access" \
-  --vpc-id "$VPC_ID" \
+EXISTING_SECURITY_GROUP_ID=$(aws ec2 describe-security-groups \
   --region "$REGION" \
-  --query 'GroupId' --output text)
+  --filters Name=group-name,Values="$SECURITY_GROUP_NAME" Name=vpc-id,Values="$VPC_ID" \
+  --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
 
-if [[ -z "$SECURITY_GROUP_ID" || "$SECURITY_GROUP_ID" == "None" ]]; then
-  echo "Güvenlik grubu oluşturulamadı. Lütfen AWS CLI yetkilerinizi kontrol edin."
-  exit 1
+if [[ "$EXISTING_SECURITY_GROUP_ID" == "None" || -z "$EXISTING_SECURITY_GROUP_ID" ]]; then
+  SECURITY_GROUP_ID=$(aws ec2 create-security-group \
+    --group-name "$SECURITY_GROUP_NAME" \
+    --description "Security group with SSH access" \
+    --vpc-id "$VPC_ID" \
+    --region "$REGION" \
+    --query 'GroupId' --output text)
+
+  echo "Güvenlik Grubu Oluşturuldu: $SECURITY_GROUP_ID"
+
+  # SSH için kural ekleme
+  aws ec2 authorize-security-group-ingress \
+    --group-id "$SECURITY_GROUP_ID" \
+    --protocol tcp \
+    --port 22 \
+    --cidr 0.0.0.0/0 \
+    --region "$REGION"
+
+  echo "SSH için güvenlik grubu kuralı eklendi."
+else
+  SECURITY_GROUP_ID="$EXISTING_SECURITY_GROUP_ID"
+  echo "Mevcut Güvenlik Grubu Kullanılıyor: $SECURITY_GROUP_ID"
 fi
-
-echo "Güvenlik Grubu Oluşturuldu: $SECURITY_GROUP_ID"
-
-# SSH için kural ekleme
-aws ec2 authorize-security-group-ingress \
-  --group-id "$SECURITY_GROUP_ID" \
-  --protocol tcp \
-  --port 22 \
-  --cidr 0.0.0.0/0 \
-  --region "$REGION"
-
-echo "SSH için güvenlik grubu kuralı eklendi."
 
 echo "Bölge: $REGION"
 
