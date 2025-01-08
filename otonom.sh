@@ -9,14 +9,28 @@ INSTANCE_TYPES=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a
 # Bölge
 REGION="us-east-1"
 
+# VPC ID kontrolü
+VPC_ID=$(aws ec2 describe-vpcs --region "$REGION" --query 'Vpcs[0].VpcId' --output text 2>/dev/null)
+if [[ -z "$VPC_ID" || "$VPC_ID" == "None" ]]; then
+  echo "VPC bulunamadı. Lütfen VPC yapılandırmasını kontrol edin."
+  exit 1
+fi
+
+echo "VPC ID: $VPC_ID"
+
 # Güvenlik grubu oluşturma ve SSH portunu açma
 SECURITY_GROUP_NAME="otonom-ssh-sg"
 SECURITY_GROUP_ID=$(aws ec2 create-security-group \
   --group-name "$SECURITY_GROUP_NAME" \
   --description "Security group with SSH access" \
-  --vpc-id $(aws ec2 describe-vpcs --region "$REGION" --query 'Vpcs[0].VpcId' --output text) \
+  --vpc-id "$VPC_ID" \
   --region "$REGION" \
   --query 'GroupId' --output text)
+
+if [[ -z "$SECURITY_GROUP_ID" || "$SECURITY_GROUP_ID" == "None" ]]; then
+  echo "Güvenlik grubu oluşturulamadı. Lütfen AWS CLI yetkilerinizi kontrol edin."
+  exit 1
+fi
 
 echo "Güvenlik Grubu Oluşturuldu: $SECURITY_GROUP_ID"
 
@@ -63,46 +77,46 @@ for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
     }" \
     --query 'SpotInstanceRequests[0].SpotInstanceRequestId' --output text 2>/dev/null)
 
-  # Eğer Spot Request başarılı olduysa
-  if [[ -n "$REQUEST_ID" && "$REQUEST_ID" != "None" ]]; then
-    echo "  Spot Request başarıyla oluşturuldu: $REQUEST_ID"
+  if [[ -z "$REQUEST_ID" || "$REQUEST_ID" == "None" ]]; then
+    echo "  Spot Request oluşturulamadı, başka bir instance türü deneniyor."
+    continue
+  fi
 
-    # Spot Instance'ın durumu kontrol ediliyor
-    while true; do
-      STATUS=$(aws ec2 describe-spot-instance-requests \
+  echo "  Spot Request başarıyla oluşturuldu: $REQUEST_ID"
+
+  # Spot Instance'ın durumu kontrol ediliyor
+  while true; do
+    STATUS=$(aws ec2 describe-spot-instance-requests \
+      --region "$REGION" \
+      --spot-instance-request-ids "$REQUEST_ID" \
+      --query 'SpotInstanceRequests[0].Status.Code' --output text)
+
+    echo "    Durum: $STATUS"
+
+    if [[ "$STATUS" == "fulfilled" ]]; then
+      INSTANCE_ID=$(aws ec2 describe-spot-instance-requests \
         --region "$REGION" \
         --spot-instance-request-ids "$REQUEST_ID" \
-        --query 'SpotInstanceRequests[0].Status.Code' --output text)
+        --query 'SpotInstanceRequests[0].InstanceId' --output text)
+      echo "  Spot Instance oluşturuldu: $INSTANCE_ID"
 
-      echo "    Durum: $STATUS"
-
-      if [[ "$STATUS" == "fulfilled" ]]; then
-        INSTANCE_ID=$(aws ec2 describe-spot-instance-requests \
-          --region "$REGION" \
-          --spot-instance-request-ids "$REQUEST_ID" \
-          --query 'SpotInstanceRequests[0].InstanceId' --output text)
-        echo "  Spot Instance oluşturuldu: $INSTANCE_ID"
-
-        # Erişim testi için Public IP adresini al
-        PUBLIC_IP=$(aws ec2 describe-instances \
-          --region "$REGION" \
-          --instance-ids "$INSTANCE_ID" \
-          --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-        echo "  Instance Public IP: $PUBLIC_IP"
-        break
-      elif [[ "$STATUS" == "capacity-oversubscribed" || "$STATUS" == "bad-parameters" ]]; then
-        echo "  Spot Request başarısız oldu, başka bir instance türü deneniyor."
-        break
-      fi
-      sleep 10
-    done
-
-    # Eğer Spot Instance oluşturulduysa diğer türlere geçme
-    if [[ -n "$INSTANCE_ID" ]]; then
+      # Erişim testi için Public IP adresini al
+      PUBLIC_IP=$(aws ec2 describe-instances \
+        --region "$REGION" \
+        --instance-ids "$INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+      echo "  Instance Public IP: $PUBLIC_IP"
+      break
+    elif [[ "$STATUS" == "capacity-oversubscribed" || "$STATUS" == "bad-parameters" ]]; then
+      echo "  Spot Request başarısız oldu, başka bir instance türü deneniyor."
       break
     fi
-  else
-    echo "  Spot Request oluşturulamadı, başka bir instance türü deneniyor."
+    sleep 10
+  done
+
+  # Eğer Spot Instance oluşturulduysa diğer türlere geçme
+  if [[ -n "$INSTANCE_ID" ]]; then
+    break
   fi
 done
 
