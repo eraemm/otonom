@@ -1,5 +1,9 @@
 #!/bin/bash
 
+set -e  # Hata durumunda scripti durdurur
+set -o pipefail  # Hataları boru hattında takip eder
+set -x  # Hata ayıklama için tüm komutları ekrana yazdırır
+
 # Spot instance türleri
 instance_types=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
 
@@ -8,7 +12,7 @@ regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2")
 
 # Ubuntu Server 24.04 LTS AMI ID'leri
 declare -A ami_ids
-ami_ids["us-east-1"]="ami-0e2c8caa4b6378d8c"  # Değerleri güncellemeyi unutmayın
+ami_ids["us-east-1"]="ami-0e2c8caa4b6378d8c"  
 ami_ids["us-west-2"]="ami-05d38da78ce859165"
 ami_ids["eu-west-1"]="ami-0e9085e60087ce171"
 ami_ids["eu-north-1"]="ami-075449515af5df0d1"
@@ -16,31 +20,34 @@ ami_ids["eu-north-1"]="ami-075449515af5df0d1"
 # Başarılı bölgeler listesi
 success_regions=()
 
+# Log dosyası
+log_file="spot_request_log.txt"
+echo "" > "$log_file"  # Log dosyasını sıfırlar
+
 # Güvenlik grubu oluşturma fonksiyonu
 create_security_group() {
     local region=$1
 
-    echo "Güvenlik grubu oluşturuluyor..."
+    echo "[$(date)] $region - Güvenlik grubu oluşturuluyor..." | tee -a "$log_file"
     security_group_id=$(aws ec2 create-security-group \
         --group-name "ec2-connect-sg" \
         --description "Allow SSH access for EC2 Instance Connect" \
         --region "$region" \
-        --query 'GroupId' --output text)
+        --query 'GroupId' --output text 2>>"$log_file")
 
     if [ -z "$security_group_id" ]; then
-        echo "$region bölgesi için güvenlik grubu oluşturulamadı."
+        echo "[$(date)] $region - Güvenlik grubu oluşturulamadı!" | tee -a "$log_file"
         return 1
     fi
 
-    # SSH portunu aç
     aws ec2 authorize-security-group-ingress \
         --group-id "$security_group_id" \
         --protocol tcp \
         --port 22 \
         --cidr 0.0.0.0/0 \
-        --region "$region"
+        --region "$region" 2>>"$log_file"
 
-    echo "Güvenlik grubu oluşturuldu: $security_group_id"
+    echo "[$(date)] $region - Güvenlik grubu oluşturuldu: $security_group_id" | tee -a "$log_file"
     echo "$security_group_id"
 }
 
@@ -48,35 +55,36 @@ create_security_group() {
 create_spot_request() {
     local region=$1
 
-    echo "Bölge: $region"
+    echo "[$(date)] $region - İşlem başlatıldı." | tee -a "$log_file"
 
-    # AMI ID'sini kontrol et
+    # AMI ID kontrolü
     ami_id=${ami_ids[$region]}
     if [ -z "$ami_id" ]; then
-        echo "$region bölgesi için AMI ID'si tanımlanmamış."
+        echo "[$(date)] $region - AMI ID'si tanımlanmamış!" | tee -a "$log_file"
         return
     fi
 
     # Güvenlik grubunu oluştur
     security_group_id=$(create_security_group "$region")
     if [ -z "$security_group_id" ]; then
+        echo "[$(date)] $region - Güvenlik grubu oluşturulamadı." | tee -a "$log_file"
         return
     fi
 
-    # Alt ağ (Subnet) ID'sini bul
+    # Alt ağ (Subnet) ID'sini kontrol et
     subnet_id=$(aws ec2 describe-subnets \
         --region "$region" \
         --query "Subnets[0].SubnetId" \
-        --output text)
+        --output text 2>>"$log_file")
 
-    if [ "$subnet_id" == "None" ]; then
-        echo "$region bölgesinde alt ağ bulunamadı."
+    if [ "$subnet_id" == "None" ] || [ -z "$subnet_id" ]; then
+        echo "[$(date)] $region - Alt ağ bulunamadı." | tee -a "$log_file"
         return
     fi
 
     # Instance türlerini sırayla dene
     for instance_type in "${instance_types[@]}"; do
-        echo "$region bölgesinde $instance_type tipi için spot instance talebi deneniyor..."
+        echo "[$(date)] $region - $instance_type tipi için spot instance talebi deneniyor..." | tee -a "$log_file"
 
         instance_id=$(aws ec2 run-instances \
             --region "$region" \
@@ -87,18 +95,18 @@ create_spot_request() {
             --associate-public-ip-address \
             --instance-market-options "MarketType=spot" \
             --count 1 \
-            --query 'Instances[0].InstanceId' --output text 2>/dev/null)
+            --query 'Instances[0].InstanceId' --output text 2>>"$log_file")
 
         if [ -n "$instance_id" ]; then
-            echo "Spot instance oluşturuldu: $instance_id ($instance_type)"
+            echo "[$(date)] $region - Spot instance oluşturuldu: $instance_id ($instance_type)" | tee -a "$log_file"
             success_regions+=("$region:$instance_type")
             return
         else
-            echo "$instance_type tipi başarısız oldu."
+            echo "[$(date)] $region - $instance_type tipi başarısız oldu." | tee -a "$log_file"
         fi
     done
 
-    echo "$region bölgesinde uygun bir spot instance tipi bulunamadı."
+    echo "[$(date)] $region - Uygun spot instance tipi bulunamadı." | tee -a "$log_file"
 }
 
 # Her bölge için işlemi çalıştır
@@ -107,7 +115,9 @@ for region in "${regions[@]}"; do
 done
 
 # Sonuçları yazdır
-echo "İşlem sonuçları:"
+echo "[$(date)] İşlem sonuçları:" | tee -a "$log_file"
 for result in "${success_regions[@]}"; do
-    echo "$result"
+    echo "[$(date)] Başarılı: $result" | tee -a "$log_file"
 done
+
+echo "[$(date)] Tüm işlemler tamamlandı." | tee -a "$log_file"
