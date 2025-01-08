@@ -16,6 +16,34 @@ ami_ids["eu-north-1"]="ami-075449515af5df0d1"
 # Başarılı bölgeler listesi
 success_regions=()
 
+# Güvenlik grubu oluşturma fonksiyonu
+create_security_group() {
+    local region=$1
+
+    echo "Güvenlik grubu oluşturuluyor..."
+    security_group_id=$(aws ec2 create-security-group \
+        --group-name "ec2-connect-sg" \
+        --description "Allow SSH access for EC2 Instance Connect" \
+        --region "$region" \
+        --query 'GroupId' --output text)
+
+    if [ -z "$security_group_id" ]; then
+        echo "$region bölgesi için güvenlik grubu oluşturulamadı."
+        return 1
+    fi
+
+    # SSH portunu aç
+    aws ec2 authorize-security-group-ingress \
+        --group-id "$security_group_id" \
+        --protocol tcp \
+        --port 22 \
+        --cidr 0.0.0.0/0 \
+        --region "$region"
+
+    echo "Güvenlik grubu oluşturuldu: $security_group_id"
+    echo "$security_group_id"
+}
+
 # Spot instance oluşturma fonksiyonu
 create_spot_request() {
     local region=$1
@@ -29,12 +57,11 @@ create_spot_request() {
         return
     fi
 
-    # Default güvenlik grubunu kullan
-    security_group_id=$(aws ec2 describe-security-groups \
-        --region "$region" \
-        --filters "Name=group-name,Values=default" \
-        --query "SecurityGroups[0].GroupId" \
-        --output text)
+    # Güvenlik grubunu oluştur
+    security_group_id=$(create_security_group "$region")
+    if [ -z "$security_group_id" ]; then
+        return
+    fi
 
     # Alt ağ (Subnet) ID'sini bul
     subnet_id=$(aws ec2 describe-subnets \
@@ -57,6 +84,7 @@ create_spot_request() {
             --instance-type "$instance_type" \
             --security-group-ids "$security_group_id" \
             --subnet-id "$subnet_id" \
+            --associate-public-ip-address \
             --instance-market-options "MarketType=spot" \
             --count 1 \
             --query 'Instances[0].InstanceId' --output text 2>/dev/null)
