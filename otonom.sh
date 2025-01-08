@@ -35,8 +35,8 @@ use_existing_security_group() {
     # SSH portunu aç (kural mevcut değilse)
     ssh_rule_exists=$(aws ec2 describe-security-group-rules \
         --region "$region" \
-        --filters Name=group-id,Values="$security_group_id" Name=from-port,Values=22 Name=to-port,Values=22 Name=protocol,Values=tcp \
-        --query 'SecurityGroupRules[?CidrIpv4==`0.0.0.0/0`].SecurityGroupRuleId' --output text)
+        --filters Name=group-id,Values="$security_group_id" Name=protocol,Values=tcp \
+        --query 'SecurityGroupRules[?FromPort==`22` && ToPort==`22` && CidrIpv4==`0.0.0.0/0`].SecurityGroupRuleId' --output text)
 
     if [ -z "$ssh_rule_exists" ]; then
         aws ec2 authorize-security-group-ingress \
@@ -97,7 +97,7 @@ create_spot_request() {
             --associate-public-ip-address \
             --instance-market-options "MarketType=spot" \
             --count 1 \
-            --query 'Instances[0].InstanceId' --output text 2>/dev/null)
+            --query 'Instances[0].InstanceId' --output text)
 
         if [ -n "$instance_id" ]; then
             echo "Spot instance oluşturuldu: $instance_id ($instance_type)"
