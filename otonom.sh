@@ -83,8 +83,24 @@ for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
     --query 'SpotInstanceRequests[0].SpotInstanceRequestId' --output text 2>/dev/null)
 
   if [[ -z "$REQUEST_ID" || "$REQUEST_ID" == "None" ]]; then
-    echo "  Spot Request oluşturulamadı, başka bir instance türü deneniyor."
-    continue
+    echo "  Spot Request oluşturulamadı. Mevcut fiyat ile oluşturmayı deniyor."
+
+    REQUEST_ID=$(aws ec2 request-spot-instances \
+      --region "$REGION" \
+      --spot-price "$(bc <<< "$SPOT_PRICE + 0.01")" \
+      --instance-count 1 \
+      --type "one-time" \
+      --launch-specification "{
+        \"ImageId\": \"$AMI_ID\",
+        \"InstanceType\": \"$INSTANCE_TYPE\",
+        \"SecurityGroupIds\": [\"$SECURITY_GROUP_ID\"]
+      }" \
+      --query 'SpotInstanceRequests[0].SpotInstanceRequestId' --output text 2>/dev/null)
+
+    if [[ -z "$REQUEST_ID" || "$REQUEST_ID" == "None" ]]; then
+      echo "  Yüksek fiyatla Spot Request oluşturulamadı."
+      continue
+    fi
   fi
 
   echo "  Spot Request başarıyla oluşturuldu: $REQUEST_ID"
