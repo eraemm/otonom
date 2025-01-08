@@ -1,123 +1,80 @@
 #!/bin/bash
 
-# Spot instance türleri
-instance_types=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
+# AWS bölgeleri ve AMI'ler
+declare -A AMIS=(
+  ["us-east-1"]="ami-0e2c8caa4b6378d8c"
+  ["us-west-2"]="ami-05d38da78ce859165"
+  ["eu-west-1"]="ami-0e9085e60087ce171"
+  ["eu-north-1"]="ami-075449515af5df0d1"
+)
 
-# Bölgeler (sadece belirtilen bölgeler)
-regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2")
+# Spot instance türleri (öncelik sırasıyla)
+INSTANCE_TYPES=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
 
-# Ubuntu Server 24.04 LTS AMI ID'leri
-declare -A ami_ids
-ami_ids["us-east-1"]="ami-0e2c8caa4b6378d8c"  # Değerleri güncellemeyi unutmayın
-ami_ids["us-west-2"]="ami-05d38da78ce859165"
-ami_ids["eu-west-1"]="ami-0e9085e60087ce171"
-ami_ids["eu-north-1"]="ami-075449515af5df0d1"
+# Güvenlik grubu
+SECURITY_GROUP="launch-wizard-1"
 
-# Başarılı bölgeler listesi
-success_regions=()
+# Key Pair (Opsiyonel, kendi key pair'inizi ekleyebilirsiniz)
+KEY_NAME="your-key-name"
 
-# Mevcut güvenlik grubunu kullanma fonksiyonu
-use_existing_security_group() {
-    local region=$1
-    local group_name="launch-wizard-1"
+# Her bölge için işlemleri başlat
+for REGION in "us-east-1" "us-west-2" "eu-west-1" "eu-north-1"; do
+  echo "Bölge: $REGION"
+  AMI_ID=${AMIS[$REGION]}
 
-    # "launch-wizard-1" güvenlik grubunun ID'sini al
-    security_group_id=$(aws ec2 describe-security-groups \
-        --region "$region" \
-        --filters Name=group-name,Values="$group_name" \
-        --query 'SecurityGroups[0].GroupId' --output text)
+  for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
+    echo "  Deneniyor: $INSTANCE_TYPE"
 
-    if [ "$security_group_id" == "None" ]; then
-        echo "$region bölgesinde $group_name adında bir güvenlik grubu bulunamadı."
-        return 1
-    fi
+    # Spot Request oluşturma
+    REQUEST_ID=$(aws ec2 request-spot-instances \
+      --region "$REGION" \
+      --spot-price "0.5" \
+      --instance-count 1 \
+      --type "one-time" \
+      --launch-specification "{
+        \"ImageId\": \"$AMI_ID\",
+        \"InstanceType\": \"$INSTANCE_TYPE\",
+        \"SecurityGroups\": [\"$SECURITY_GROUP\"],
+        \"KeyName\": \"$KEY_NAME\"
+      }" \
+      --query 'SpotInstanceRequests[0].SpotInstanceRequestId' --output text 2>/dev/null)
 
-    # SSH portunu aç (kural mevcut değilse)
-    ssh_rule_exists=$(aws ec2 describe-security-group-rules \
-        --region "$region" \
-        --filters Name=group-id,Values="$security_group_id" Name=protocol,Values=tcp \
-        --query 'SecurityGroupRules[?FromPort==`22` && ToPort==`22` && CidrIpv4==`0.0.0.0/0`].SecurityGroupRuleId' --output text)
+    # Eğer Spot Request başarılı olduysa
+    if [[ -n "$REQUEST_ID" && "$REQUEST_ID" != "None" ]]; then
+      echo "  Spot Request başarıyla oluşturuldu: $REQUEST_ID"
 
-    if [ -z "$ssh_rule_exists" ]; then
-        aws ec2 authorize-security-group-ingress \
-            --group-id "$security_group_id" \
-            --protocol tcp \
-            --port 22 \
-            --cidr 0.0.0.0/0 \
-            --region "$region"
+      # Spot Instance'ın durumu kontrol ediliyor
+      while true; do
+        STATUS=$(aws ec2 describe-spot-instance-requests \
+          --region "$REGION" \
+          --spot-instance-request-ids "$REQUEST_ID" \
+          --query 'SpotInstanceRequests[0].Status.Code' --output text)
 
-        echo "$group_name güvenlik grubunda SSH (22) portu açıldı."
-    else
-        echo "$group_name güvenlik grubunda SSH (22) portu zaten açık."
-    fi
+        echo "    Durum: $STATUS"
 
-    echo "$security_group_id"
-}
-
-# Spot instance oluşturma fonksiyonu
-create_spot_request() {
-    local region=$1
-
-    echo "Bölge: $region"
-
-    # AMI ID'sini kontrol et
-    ami_id=${ami_ids[$region]}
-    if [ -z "$ami_id" ]; then
-        echo "$region bölgesi için AMI ID'si tanımlanmamış."
-        return
-    fi
-
-    # Mevcut güvenlik grubunu kullan
-    security_group_id=$(use_existing_security_group "$region")
-    if [ -z "$security_group_id" ]; then
-        return
-    fi
-
-    # Alt ağ (Subnet) ID'sini bul
-    subnet_id=$(aws ec2 describe-subnets \
-        --region "$region" \
-        --query "Subnets[0].SubnetId" \
-        --output text)
-
-    if [ "$subnet_id" == "None" ]; then
-        echo "$region bölgesinde alt ağ bulunamadı."
-        return
-    fi
-
-    # Instance türlerini sırayla dene
-    for instance_type in "${instance_types[@]}"; do
-        echo "$region bölgesinde $instance_type tipi için spot instance talebi deneniyor..."
-
-        instance_id=$(aws ec2 run-instances \
-            --region "$region" \
-            --image-id "$ami_id" \
-            --instance-type "$instance_type" \
-            --security-group-ids "$security_group_id" \
-            --subnet-id "$subnet_id" \
-            --associate-public-ip-address \
-            --instance-market-options "MarketType=spot" \
-            --count 1 \
-            --query 'Instances[0].InstanceId' --output text)
-
-        if [ -n "$instance_id" ]; then
-            echo "Spot instance oluşturuldu: $instance_id ($instance_type)"
-            success_regions+=("$region:$instance_type")
-            return
-        else
-            echo "$instance_type tipi başarısız oldu."
+        if [[ "$STATUS" == "fulfilled" ]]; then
+          INSTANCE_ID=$(aws ec2 describe-spot-instance-requests \
+            --region "$REGION" \
+            --spot-instance-request-ids "$REQUEST_ID" \
+            --query 'SpotInstanceRequests[0].InstanceId' --output text)
+          echo "  Spot Instance oluşturuldu: $INSTANCE_ID"
+          break
+        elif [[ "$STATUS" == "capacity-oversubscribed" || "$STATUS" == "bad-parameters" ]]; then
+          echo "  Spot Request başarısız oldu, başka bir instance türü deneniyor."
+          break
         fi
-    done
+        sleep 10
+      done
 
-    echo "$region bölgesinde uygun bir spot instance tipi bulunamadı."
-}
+      # Eğer Spot Instance oluşturulduysa diğer türlere geçme
+      if [[ -n "$INSTANCE_ID" ]]; then
+        break
+      fi
+    else
+      echo "  Spot Request oluşturulamadı, başka bir instance türü deneniyor."
+    fi
+  done
 
-# Her bölge için işlemi çalıştır
-for region in "${regions[@]}"; do
-    create_spot_request "$region"
 done
 
-# Sonuçları yazdır
-echo "İşlem sonuçları:"
-for result in "${success_regions[@]}"; do
-    echo "$result"
-done
+echo "Script tamamlandı."
