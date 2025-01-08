@@ -64,6 +64,13 @@ for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
           --spot-instance-request-ids "$REQUEST_ID" \
           --query 'SpotInstanceRequests[0].InstanceId' --output text)
         echo "  Spot Instance oluşturuldu: $INSTANCE_ID"
+
+        # Erişim testi için Public IP adresini al
+        PUBLIC_IP=$(aws ec2 describe-instances \
+          --region "$REGION" \
+          --instance-ids "$INSTANCE_ID" \
+          --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+        echo "  Instance Public IP: $PUBLIC_IP"
         break
       elif [[ "$STATUS" == "capacity-oversubscribed" || "$STATUS" == "bad-parameters" ]]; then
         echo "  Spot Request başarısız oldu, başka bir instance türü deneniyor."
