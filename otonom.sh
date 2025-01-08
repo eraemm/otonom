@@ -6,11 +6,29 @@ AMI_ID="ami-0e2c8caa4b6378d8c"
 # Spot instance türleri (öncelik sırasıyla)
 INSTANCE_TYPES=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
 
-# Güvenlik grubu (SSH portu açık olacak şekilde)
-SECURITY_GROUP="launch-wizard-1"
-
 # Bölge
 REGION="us-east-1"
+
+# Güvenlik grubu oluşturma ve SSH portunu açma
+SECURITY_GROUP_NAME="otonom-ssh-sg"
+SECURITY_GROUP_ID=$(aws ec2 create-security-group \
+  --group-name "$SECURITY_GROUP_NAME" \
+  --description "Security group with SSH access" \
+  --vpc-id $(aws ec2 describe-vpcs --region "$REGION" --query 'Vpcs[0].VpcId' --output text) \
+  --region "$REGION" \
+  --query 'GroupId' --output text)
+
+echo "Güvenlik Grubu Oluşturuldu: $SECURITY_GROUP_ID"
+
+# SSH için kural ekleme
+aws ec2 authorize-security-group-ingress \
+  --group-id "$SECURITY_GROUP_ID" \
+  --protocol tcp \
+  --port 22 \
+  --cidr 0.0.0.0/0 \
+  --region "$REGION"
+
+echo "SSH için güvenlik grubu kuralı eklendi."
 
 echo "Bölge: $REGION"
 
@@ -41,7 +59,7 @@ for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
     --launch-specification "{
       \"ImageId\": \"$AMI_ID\",
       \"InstanceType\": \"$INSTANCE_TYPE\",
-      \"SecurityGroups\": [\"$SECURITY_GROUP\"]
+      \"SecurityGroupIds\": [\"$SECURITY_GROUP_ID\"]
     }" \
     --query 'SpotInstanceRequests[0].SpotInstanceRequestId' --output text 2>/dev/null)
 
