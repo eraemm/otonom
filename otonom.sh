@@ -29,6 +29,7 @@ create_or_get_security_group() {
     local region=$1
 
     echo "[$(date)] $region - Güvenlik grubu kontrol ediliyor..." | tee -a "$log_file"
+    
     # Mevcut güvenlik grubunu kontrol et
     security_group_id=$(aws ec2 describe-security-groups \
         --region "$region" \
@@ -61,6 +62,7 @@ create_or_get_security_group() {
         echo "[$(date)] $region - Güvenlik grubu oluşturuldu ve SSH için kurallar eklendi: $security_group_id" | tee -a "$log_file"
     fi
 
+    # Sadece güvenlik grubu ID'sini döndür
     echo "$security_group_id"
 }
 
