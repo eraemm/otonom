@@ -25,10 +25,25 @@ for REGION in "us-east-1" "us-west-2" "eu-west-1" "eu-north-1"; do
   for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
     echo "  Deneniyor: $INSTANCE_TYPE"
 
+    # Mevcut Spot fiyatını sorgulama
+    SPOT_PRICE=$(aws ec2 describe-spot-price-history \
+      --region "$REGION" \
+      --instance-types "$INSTANCE_TYPE" \
+      --product-descriptions "Linux/UNIX" \
+      --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+      --query 'SpotPriceHistory[0].SpotPrice' --output text 2>/dev/null)
+
+    if [[ -z "$SPOT_PRICE" || "$SPOT_PRICE" == "None" ]]; then
+      echo "  Spot fiyatı alınamadı, başka bir instance türü deneniyor."
+      continue
+    fi
+
+    echo "  Mevcut Spot fiyatı: $SPOT_PRICE"
+
     # Spot Request oluşturma
     REQUEST_ID=$(aws ec2 request-spot-instances \
       --region "$REGION" \
-      --spot-price "0.5" \
+      --spot-price "$SPOT_PRICE" \
       --instance-count 1 \
       --type "one-time" \
       --launch-specification "{
