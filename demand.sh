@@ -18,6 +18,34 @@ ami_ids["eu-central-1"]="ami-0a628e1e89aaedf80"
 success_regions=()
 failed_regions=()
 
+# vCPU limit ve kullanım kontrol fonksiyonu
+check_vcpu_limit() {
+    local region=$1
+    echo "Bölge $region için vCPU limiti kontrol ediliyor..."
+
+    # Hesabın vCPU limitini al
+    vcpu_limit=$(aws service-quotas get-service-quota         --region "$region"         --service-code ec2         --quota-code L-1216C47A         --query "Quota.Value" --output text)
+
+    if [ -z "$vcpu_limit" ]; then
+        echo "vCPU limiti alınamadı. Bölge $region atlanıyor."
+        return 1
+    fi
+
+    # Mevcut vCPU kullanımını hesapla
+    vcpu_used=$(aws ec2 describe-instance-status         --region "$region"         --query "InstanceStatuses[].InstanceId" --output text | wc -l)
+
+    echo "vCPU Limit: $vcpu_limit, Kullanım: $vcpu_used"
+
+    # Eğer limit 64 değilse veya kullanım dolmuşsa bölgeyi atla
+    if (( vcpu_limit < 64 || vcpu_used >= 64 )); then
+        echo "vCPU limiti uygun değil veya kullanım dolmuş. Bölge $region atlanıyor."
+        return 1
+    fi
+
+    echo "Bölge $region için vCPU limiti uygun."
+    return 0
+}
+
 # Uygun instance türü bulma fonksiyonu
 find_instance_type() {
     local region=$1
@@ -113,6 +141,7 @@ EOF
 
 # Tüm bölgeler için on-demand instance talepleri
 for region in "${regions[@]}"; do
+    check_vcpu_limit "$region" || continue
     create_on_demand_request "$region"
 done
 
