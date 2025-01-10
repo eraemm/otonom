@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Spot instance türleri
-declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge")
+declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge" "r7a.16xlarge" "c6a.16xlarge" "m6a.16xlarge" "r6a.16xlarge")
 
 # Yeni bölgeler
-declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2")
+declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2" "eu-central-1")
 
 # Her bölge için AMI ID'leri
 declare -A ami_ids
@@ -12,6 +12,7 @@ ami_ids["eu-west-1"]="ami-0e9085e60087ce171"
 ami_ids["eu-north-1"]="ami-075449515af5df0d1"
 ami_ids["us-east-1"]="ami-0e2c8caa4b6378d8c"
 ami_ids["us-west-2"]="ami-05d38da78ce859165"
+ami_ids["eu-central-1"]="ami-0a628e1e89aaedf80"
 
 # Başarılı ve başarısız bölgeler için diziler
 success_regions=()
@@ -71,7 +72,8 @@ create_spot_request() {
     security_group_id=$(aws ec2 describe-security-groups \
         --region "$region" \
         --filters "Name=group-name,Values=default" \
-        --query "SecurityGroups[0].GroupId" --output text)
+        --query "SecurityGroups[0].GroupId" \
+        --output text)
 
     aws ec2 authorize-security-group-ingress \
         --region "$region" \
