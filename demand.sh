@@ -26,19 +26,22 @@ check_vcpu_limit() {
     # Hesabın vCPU limitini al
     vcpu_limit=$(aws service-quotas get-service-quota         --region "$region"         --service-code ec2         --quota-code L-1216C47A         --query "Quota.Value" --output text)
 
+    # vCPU limitini tamsayıya dönüştür
+    vcpu_limit=$(printf "%.0f" "$vcpu_limit")
+
     if [ -z "$vcpu_limit" ]; then
         echo "vCPU limiti alınamadı. Bölge $region atlanıyor."
         return 1
     fi
 
     # Mevcut vCPU kullanımını hesapla
-    vcpu_used=$(aws ec2 describe-instance-status         --region "$region"         --query "InstanceStatuses[].InstanceId" --output text | wc -l)
+    vcpu_used=$(aws ec2 describe-instances         --region "$region"         --query "Reservations[*].Instances[*].InstanceId" --output text | wc -l)
 
     echo "vCPU Limit: $vcpu_limit, Kullanım: $vcpu_used"
 
-    # Eğer limit 64 değilse veya kullanım dolmuşsa bölgeyi atla
-    if (( vcpu_limit < 64 || vcpu_used >= 64 )); then
-        echo "vCPU limiti uygun değil veya kullanım dolmuş. Bölge $region atlanıyor."
+    # Eğer limit tam olarak 64 değilse veya kullanım varsa bölgeyi atla
+    if (( vcpu_limit != 64 || vcpu_used > 0 )); then
+        echo "vCPU limiti 64 değil veya kullanım mevcut. Bölge $region atlanıyor."
         return 1
     fi
 
