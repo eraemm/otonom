@@ -1,144 +1,109 @@
 #!/bin/bash
 
-# AWS AMI
-AMI_ID="ami-0e2c8caa4b6378d8c"
+# Yeni instance türleri
+declare -a instance_types=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
 
-# Spot instance türleri (öncelik sırasıyla)
-INSTANCE_TYPES=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
+# Yeni bölgeler
+declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2")
 
-# Bölge
-REGION="us-east-1"
+# Her bölge için AMI ID'leri
+declare -A ami_ids
+ami_ids["eu-west-1"]="ami-0e9085e60087ce171"
+ami_ids["eu-north-1"]="ami-075449515af5df0d1"
+ami_ids["us-east-1"]="ami-0e2c8caa4b6378d8c"
+ami_ids["us-west-2"]="ami-05d38da78ce859165"
 
-# VPC ID kontrolü
-VPC_ID=$(aws ec2 describe-vpcs --region "$REGION" --query 'Vpcs[0].VpcId' --output text 2>/dev/null)
-if [[ -z "$VPC_ID" || "$VPC_ID" == "None" ]]; then
-  echo "VPC bulunamadı. Lütfen VPC yapılandırmasını kontrol edin."
-  exit 1
-fi
+# Başarılı ve başarısız bölgeler için diziler
+success_regions=()
+failed_regions=()
 
-echo "VPC ID: $VPC_ID"
+# Uygun instance türü bulma fonksiyonu
+find_instance_type() {
+    local region=$1
+    for instance_type in "${instance_types[@]}"; do
+        available=$(aws ec2 describe-instance-type-offerings \
+            --region "$region" \
+            --filters "Name=instance-type,Values=$instance_type" "Name=location,Values=$region" \
+            --query "InstanceTypeOfferings | length(@)" --output text)
+        if [ "$available" -gt 0 ]; then
+            echo "$instance_type"
+            return
+        fi
+    done
+    echo ""
+}
 
-# Güvenlik grubu kontrolü veya oluşturulması
-SECURITY_GROUP_NAME="otonom-ssh-sg"
-EXISTING_SECURITY_GROUP_ID=$(aws ec2 describe-security-groups \
-  --region "$REGION" \
-  --filters Name=group-name,Values="$SECURITY_GROUP_NAME" Name=vpc-id,Values="$VPC_ID" \
-  --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+# Spot instance talebi oluşturma fonksiyonu
+create_spot_request() {
+    local region=$1
+    echo "Bölge: $region"
 
-if [[ "$EXISTING_SECURITY_GROUP_ID" == "None" || -z "$EXISTING_SECURITY_GROUP_ID" ]]; then
-  SECURITY_GROUP_ID=$(aws ec2 create-security-group \
-    --group-name "$SECURITY_GROUP_NAME" \
-    --description "Security group with SSH access" \
-    --vpc-id "$VPC_ID" \
-    --region "$REGION" \
-    --query 'GroupId' --output text)
+    # Bölgeye göre doğru instance türünü bul
+    instance_type=$(find_instance_type "$region")
 
-  echo "Güvenlik Grubu Oluşturuldu: $SECURITY_GROUP_ID"
-
-  # SSH için kural ekleme
-  aws ec2 authorize-security-group-ingress \
-    --group-id "$SECURITY_GROUP_ID" \
-    --protocol tcp \
-    --port 22 \
-    --cidr 0.0.0.0/0 \
-    --region "$REGION"
-
-  echo "SSH için güvenlik grubu kuralı eklendi."
-else
-  SECURITY_GROUP_ID="$EXISTING_SECURITY_GROUP_ID"
-  echo "Mevcut Güvenlik Grubu Kullanılıyor: $SECURITY_GROUP_ID"
-fi
-
-echo "Bölge: $REGION"
-
-for INSTANCE_TYPE in "${INSTANCE_TYPES[@]}"; do
-  echo "  Deneniyor: $INSTANCE_TYPE"
-
-  # Mevcut Spot fiyatını sorgulama
-  SPOT_PRICE=$(aws ec2 describe-spot-price-history \
-    --region "$REGION" \
-    --instance-types "$INSTANCE_TYPE" \
-    --product-descriptions "Linux/UNIX" \
-    --start-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
-    --query 'SpotPriceHistory[0].SpotPrice' --output text 2>/dev/null)
-
-  if [[ -z "$SPOT_PRICE" || "$SPOT_PRICE" == "None" ]]; then
-    echo "  Spot fiyatı alınamadı, başka bir instance türü deneniyor."
-    continue
-  fi
-
-  echo "  Mevcut Spot fiyatı: $SPOT_PRICE"
-
-  # Spot Request oluşturma
-  REQUEST_ID=$(aws ec2 request-spot-instances \
-    --region "$REGION" \
-    --spot-price "$SPOT_PRICE" \
-    --instance-count 1 \
-    --type "one-time" \
-    --launch-specification "{
-      \"ImageId\": \"$AMI_ID\",
-      \"InstanceType\": \"$INSTANCE_TYPE\",
-      \"SecurityGroupIds\": [\"$SECURITY_GROUP_ID\"]
-    }" \
-    --query 'SpotInstanceRequests[0].SpotInstanceRequestId' --output text 2>/dev/null)
-
-  if [[ -z "$REQUEST_ID" || "$REQUEST_ID" == "None" ]]; then
-    echo "  Spot Request oluşturulamadı. Mevcut fiyat ile oluşturmayı deniyor."
-
-    REQUEST_ID=$(aws ec2 request-spot-instances \
-      --region "$REGION" \
-      --spot-price "$(bc <<< "$SPOT_PRICE + 0.01")" \
-      --instance-count 1 \
-      --type "one-time" \
-      --launch-specification "{
-        \"ImageId\": \"$AMI_ID\",
-        \"InstanceType\": \"$INSTANCE_TYPE\",
-        \"SecurityGroupIds\": [\"$SECURITY_GROUP_ID\"]
-      }" \
-      --query 'SpotInstanceRequests[0].SpotInstanceRequestId' --output text 2>/dev/null)
-
-    if [[ -z "$REQUEST_ID" || "$REQUEST_ID" == "None" ]]; then
-      echo "  Yüksek fiyatla Spot Request oluşturulamadı."
-      continue
+    if [ -z "$instance_type" ]; then
+        echo "$region bölgesinde uygun bir instance türü bulunamadı."
+        failed_regions+=("$region")
+        return
     fi
-  fi
+    echo "Seçilen instance türü: $instance_type"
 
-  echo "  Spot Request başarıyla oluşturuldu: $REQUEST_ID"
-
-  # Spot Instance'ın durumu kontrol ediliyor
-  while true; do
-    STATUS=$(aws ec2 describe-spot-instance-requests \
-      --region "$REGION" \
-      --spot-instance-request-ids "$REQUEST_ID" \
-      --query 'SpotInstanceRequests[0].Status.Code' --output text)
-
-    echo "    Durum: $STATUS"
-
-    if [[ "$STATUS" == "fulfilled" ]]; then
-      INSTANCE_ID=$(aws ec2 describe-spot-instance-requests \
-        --region "$REGION" \
-        --spot-instance-request-ids "$REQUEST_ID" \
-        --query 'SpotInstanceRequests[0].InstanceId' --output text)
-      echo "  Spot Instance oluşturuldu: $INSTANCE_ID"
-
-      # Erişim testi için Public IP adresini al
-      PUBLIC_IP=$(aws ec2 describe-instances \
-        --region "$REGION" \
-        --instance-ids "$INSTANCE_ID" \
-        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-      echo "  Instance Public IP: $PUBLIC_IP"
-      break
-    elif [[ "$STATUS" == "capacity-oversubscribed" || "$STATUS" == "bad-parameters" ]]; then
-      echo "  Spot Request başarısız oldu, başka bir instance türü deneniyor."
-      break
+    # AMI ID'sini belirle
+    ami_id=${ami_ids[$region]}
+    if [ -z "$ami_id" ]; then
+        echo "$region bölgesi için AMI ID'si tanımlanmamış."
+        failed_regions+=("$region")
+        return
     fi
-    sleep 10
-  done
 
-  # Eğer Spot Instance oluşturulduysa diğer türlere geçme
-  if [[ -n "$INSTANCE_ID" ]]; then
-    break
-  fi
+    # Default güvenlik grubunu bul ve SSH portunu aç
+    security_group_id=$(aws ec2 describe-security-groups \
+        --region "$region" \
+        --filters "Name=group-name,Values=default" \
+        --query "SecurityGroups[0].GroupId" --output text)
+
+    aws ec2 authorize-security-group-ingress \
+        --region "$region" \
+        --group-id "$security_group_id" \
+        --protocol tcp --port 22 --cidr 0.0.0.0/0 2>/dev/null || true
+
+    # Alt ağ (Subnet) ID'sini bul
+    subnet_id=$(aws ec2 describe-subnets --region "$region" --query "Subnets[0].SubnetId" --output text)
+
+    if [ "$subnet_id" == "None" ]; then
+        echo "$region bölgesinde alt ağ bulunamadı."
+        failed_regions+=("$region")
+        return
+    fi
+
+    # Spot instance talebi oluştur
+    echo "$region bölgesinde uygun bir tür için spot instance talebi oluşturuluyor..."
+
+    instance_id=$(aws ec2 run-instances \
+        --region "$region" \
+        --image-id "$ami_id" \
+        --instance-type "$instance_type" \
+        --security-group-ids "$security_group_id" \
+        --subnet-id "$subnet_id" \
+        --instance-market-options '{"MarketType":"spot"}' \
+        --count 1 \
+        --query 'Instances[0].InstanceId' --output text)
+
+    if [ -n "$instance_id" ]; then
+        echo "Spot instance talebi başarılı: $instance_id"
+        success_regions+=("$region:$instance_type")
+    else
+        echo "Spot instance talebi başarısız."
+        failed_regions+=("$region")
+    fi
+}
+
+# Tüm bölgeler için spot instance talepleri
+for region in "${regions[@]}"; do
+    create_spot_request "$region"
 done
 
-echo "Script tamamlandı."
+# Sonuçları yazdırma
+echo "İşlem sonuçları:"
+echo "Başarılı bölgeler: ${success_regions[@]}"
+echo "Başarısız bölgeler: ${failed_regions[@]}"
