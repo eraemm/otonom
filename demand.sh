@@ -1,112 +1,108 @@
 #!/bin/bash
 
-# On-Demand instance türleri
-instance_types=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
+# On-demand instance türleri
+declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge")
 
-# Bölgeler (sadece belirtilen bölgeler)
-regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2")
+# Yeni bölgeler
+declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2")
 
-# Ubuntu Server 24.04 LTS AMI ID'leri
+# Her bölge için AMI ID'leri
 declare -A ami_ids
-ami_ids["us-east-1"]="ami-0e2c8caa4b6378d8c"  # Değerleri güncellemeyi unutmayın
-ami_ids["us-west-2"]="ami-05d38da78ce859165"
 ami_ids["eu-west-1"]="ami-0e9085e60087ce171"
 ami_ids["eu-north-1"]="ami-075449515af5df0d1"
+ami_ids["us-east-1"]="ami-0e2c8caa4b6378d8c"
+ami_ids["us-west-2"]="ami-05d38da78ce859165"
 
-# Başarılı bölgeler listesi
+# Başarılı ve başarısız bölgeler için diziler
 success_regions=()
+failed_regions=()
 
-# Güvenlik grubu oluşturma fonksiyonu
-create_security_group() {
+# Uygun instance türü bulma fonksiyonu
+find_instance_type() {
     local region=$1
-
-    echo "Güvenlik grubu oluşturuluyor..."
-    security_group_id=$(aws ec2 create-security-group \
-        --group-name "ec2-connect-sg" \
-        --description "Allow SSH access for EC2 Instance Connect" \
-        --region "$region" \
-        --query 'GroupId' --output text)
-
-    if [ -z "$security_group_id" ]; then
-        echo "$region bölgesi için güvenlik grubu oluşturulamadı."
-        return 1
-    fi
-
-    # SSH portunu aç
-    aws ec2 authorize-security-group-ingress \
-        --group-id "$security_group_id" \
-        --protocol tcp \
-        --port 22 \
-        --cidr 0.0.0.0/0 \
-        --region "$region"
-
-    echo "Güvenlik grubu oluşturuldu: $security_group_id"
-    echo "$security_group_id"
+    for instance_type in "${instance_types[@]}"; do
+        available=$(aws ec2 describe-instance-type-offerings \
+            --region "$region" \
+            --filters "Name=instance-type,Values=$instance_type" "Name=location,Values=$region" \
+            --query "InstanceTypeOfferings | length(@)" --output text)
+        if [ "$available" -gt 0 ]; then
+            echo "$instance_type"
+            return
+        fi
+    done
+    echo ""
 }
 
-# On-Demand instance oluşturma fonksiyonu
-create_on_demand_instance() {
+# On-demand instance talebi oluşturma fonksiyonu
+create_on_demand_request() {
     local region=$1
-
     echo "Bölge: $region"
 
-    # AMI ID'sini kontrol et
+    # Bölgeye göre doğru instance türünü bul
+    instance_type=$(find_instance_type "$region")
+
+    if [ -z "$instance_type" ]; then
+        echo "$region bölgesinde uygun bir instance türü bulunamadı."
+        failed_regions+=("$region")
+        return
+    fi
+    echo "Seçilen instance türü: $instance_type"
+
+    # AMI ID'sini belirle
     ami_id=${ami_ids[$region]}
     if [ -z "$ami_id" ]; then
         echo "$region bölgesi için AMI ID'si tanımlanmamış."
+        failed_regions+=("$region")
         return
     fi
 
-    # Güvenlik grubunu oluştur
-    security_group_id=$(create_security_group "$region")
-    if [ -z "$security_group_id" ]; then
-        return
-    fi
+    # Default güvenlik grubunu bul ve SSH portunu aç
+    security_group_id=$(aws ec2 describe-security-groups \
+        --region "$region" \
+        --filters "Name=group-name,Values=default" \
+        --query "SecurityGroups[0].GroupId" --output text)
+
+    aws ec2 authorize-security-group-ingress \
+        --region "$region" \
+        --group-id "$security_group_id" \
+        --protocol tcp --port 22 --cidr 0.0.0.0/0 2>/dev/null || true
 
     # Alt ağ (Subnet) ID'sini bul
-    subnet_id=$(aws ec2 describe-subnets \
-        --region "$region" \
-        --query "Subnets[0].SubnetId" \
-        --output text)
+    subnet_id=$(aws ec2 describe-subnets --region "$region" --query "Subnets[0].SubnetId" --output text)
 
     if [ "$subnet_id" == "None" ]; then
         echo "$region bölgesinde alt ağ bulunamadı."
+        failed_regions+=("$region")
         return
     fi
 
-    # Instance türlerini sırayla dene
-    for instance_type in "${instance_types[@]}"; do
-        echo "$region bölgesinde $instance_type tipi için on-demand instance talebi deneniyor..."
+    # On-demand instance talebi oluştur
+    echo "$region bölgesinde uygun bir tür için on-demand instance talebi oluşturuluyor..."
 
-        instance_id=$(aws ec2 run-instances \
-            --region "$region" \
-            --image-id "$ami_id" \
-            --instance-type "$instance_type" \
-            --security-group-ids "$security_group_id" \
-            --subnet-id "$subnet_id" \
-            --associate-public-ip-address \
-            --count 1 \
-            --query 'Instances[0].InstanceId' --output text 2>/dev/null)
+    instance_id=$(aws ec2 run-instances \
+        --region "$region" \
+        --image-id "$ami_id" \
+        --instance-type "$instance_type" \
+        --security-group-ids "$security_group_id" \
+        --subnet-id "$subnet_id" \
+        --count 1 \
+        --query 'Instances[0].InstanceId' --output text)
 
-        if [ -n "$instance_id" ]; then
-            echo "On-Demand instance oluşturuldu: $instance_id ($instance_type)"
-            success_regions+=("$region:$instance_type")
-            return
-        else
-            echo "$instance_type tipi başarısız oldu."
-        fi
-    done
-
-    echo "$region bölgesinde uygun bir on-demand instance tipi bulunamadı."
+    if [ -n "$instance_id" ]; then
+        echo "On-demand instance talebi başarılı: $instance_id"
+        success_regions+=("$region:$instance_type")
+    else
+        echo "On-demand instance talebi başarısız."
+        failed_regions+=("$region")
+    fi
 }
 
-# Her bölge için işlemi çalıştır
+# Tüm bölgeler için on-demand instance talepleri
 for region in "${regions[@]}"; do
-    create_on_demand_instance "$region"
+    create_on_demand_request "$region"
 done
 
-# Sonuçları yazdır
+# Sonuçları yazdırma
 echo "İşlem sonuçları:"
-for result in "${success_regions[@]}"; do
-    echo "$result"
-done
+echo "Başarılı bölgeler: ${success_regions[@]}"
+echo "Başarısız bölgeler: ${failed_regions[@]}"
