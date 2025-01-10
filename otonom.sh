@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Yeni instance türleri
-declare -a instance_types=("c6a.16xlarge" "c7a.16xlarge" "m6a.16xlarge" "m7a.16xlarge" "r6a.16xlarge" "r7a.16xlarge")
+# Spot instance türleri
+declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge")
 
 # Yeni bölgeler
 declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2")
@@ -31,6 +31,17 @@ find_instance_type() {
         fi
     done
     echo ""
+}
+
+# Alt bölgeleri dinamik olarak bulma fonksiyonu
+find_subnet_in_az() {
+    local region=$1
+    local az=$2
+    aws ec2 describe-subnets \
+        --region "$region" \
+        --filters "Name=availability-zone,Values=$az" \
+        --query "Subnets[0].SubnetId" \
+        --output text
 }
 
 # Spot instance talebi oluşturma fonksiyonu
@@ -67,11 +78,19 @@ create_spot_request() {
         --group-id "$security_group_id" \
         --protocol tcp --port 22 --cidr 0.0.0.0/0 2>/dev/null || true
 
-    # Alt ağ (Subnet) ID'sini bul
-    subnet_id=$(aws ec2 describe-subnets --region "$region" --query "Subnets[0].SubnetId" --output text)
+    # Alt bölgelerde uygun bir subnet arayın
+    azs=$(aws ec2 describe-availability-zones --region "$region" --query "AvailabilityZones[].ZoneName" --output text)
+
+    for az in $azs; do
+        subnet_id=$(find_subnet_in_az "$region" "$az")
+        if [ "$subnet_id" != "None" ]; then
+            echo "$region bölgesinde alt bölge bulundu: $az"
+            break
+        fi
+    done
 
     if [ "$subnet_id" == "None" ]; then
-        echo "$region bölgesinde alt ağ bulunamadı."
+        echo "$region bölgesinde uygun bir alt ağ bulunamadı."
         failed_regions+=("$region")
         return
     fi

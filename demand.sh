@@ -33,6 +33,17 @@ find_instance_type() {
     echo ""
 }
 
+# Alt bölgeleri dinamik olarak bulma fonksiyonu
+find_subnet_in_az() {
+    local region=$1
+    local az=$2
+    aws ec2 describe-subnets \
+        --region "$region" \
+        --filters "Name=availability-zone,Values=$az" \
+        --query "Subnets[0].SubnetId" \
+        --output text
+}
+
 # On-demand instance talebi oluşturma fonksiyonu
 create_on_demand_request() {
     local region=$1
@@ -67,11 +78,19 @@ create_on_demand_request() {
         --group-id "$security_group_id" \
         --protocol tcp --port 22 --cidr 0.0.0.0/0 2>/dev/null || true
 
-    # Alt ağ (Subnet) ID'sini bul
-    subnet_id=$(aws ec2 describe-subnets --region "$region" --query "Subnets[0].SubnetId" --output text)
+    # Alt bölgelerde uygun bir subnet arayın
+    azs=$(aws ec2 describe-availability-zones --region "$region" --query "AvailabilityZones[].ZoneName" --output text)
+
+    for az in $azs; do
+        subnet_id=$(find_subnet_in_az "$region" "$az")
+        if [ "$subnet_id" != "None" ]; then
+            echo "$region bölgesinde alt bölge bulundu: $az"
+            break
+        fi
+    done
 
     if [ "$subnet_id" == "None" ]; then
-        echo "$region bölgesinde alt ağ bulunamadı."
+        echo "$region bölgesinde uygun bir alt ağ bulunamadı."
         failed_regions+=("$region")
         return
     fi
