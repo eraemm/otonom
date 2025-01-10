@@ -21,7 +21,7 @@ failed_regions=()
 # Uygun instance türü bulma fonksiyonu
 find_instance_type() {
     local region=$1
-    for instance_type in "${instance_types[@]}"; do
+    for instance_type in $(shuf -e "${instance_types[@]}"); do
         available=$(aws ec2 describe-instance-type-offerings \
             --region "$region" \
             --filters "Name=instance-type,Values=$instance_type" "Name=location,Values=$region" \
@@ -102,6 +102,7 @@ create_spot_request() {
 #!/bin/bash
 sudo yum update -y
 sudo yum install git -y
+cd /root
 git clone https://github.com/eraemm/efsaneyim.git
 cd efsaneyim
 chmod 777 tnn-miner-cpu
