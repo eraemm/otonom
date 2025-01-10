@@ -18,7 +18,7 @@ ami_ids["eu-central-1"]="ami-0a628e1e89aaedf80"
 success_regions=()
 failed_regions=()
 
-# vCPU limit ve kullanım kontrol fonksiyonu
+# vCPU limit kontrol fonksiyonu
 check_vcpu_limit() {
     local region=$1
     echo "Bölge $region için vCPU limiti kontrol ediliyor..."
@@ -34,14 +34,11 @@ check_vcpu_limit() {
         return 1
     fi
 
-    # Mevcut vCPU kullanımını hesapla
-    vcpu_used=$(aws ec2 describe-instances         --region "$region"         --query "Reservations[*].Instances[*].InstanceId" --output text | wc -l)
+    echo "vCPU Limit: $vcpu_limit"
 
-    echo "vCPU Limit: $vcpu_limit, Kullanım: $vcpu_used"
-
-    # Eğer limit tam olarak 64 değilse veya kullanım varsa bölgeyi atla
-    if (( vcpu_limit != 64 || vcpu_used > 0 )); then
-        echo "vCPU limiti 64 değil veya kullanım mevcut. Bölge $region atlanıyor."
+    # Eğer limit tam olarak 64 değilse bölgeyi atla
+    if (( vcpu_limit != 64 )); then
+        echo "vCPU limiti 64 değil. Bölge $region atlanıyor."
         return 1
     fi
 
