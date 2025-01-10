@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Spot instance türleri
-declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge" "r7a.16xlarge" "c6a.16xlarge" "m6a.16xlarge" "r6a.16xlarge")
+# On-demand instance türleri
+declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge" "r7a.16xlarge")
 
 # Yeni bölgeler
 declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2" "eu-central-1")
@@ -38,8 +38,8 @@ find_subnet_in_az() {
     aws ec2 describe-subnets         --region "$region"         --filters "Name=availability-zone,Values=$az"         --query "Subnets[0].SubnetId"         --output text
 }
 
-# Spot instance talebi oluşturma fonksiyonu
-create_spot_request() {
+# On-demand instance talebi oluşturma fonksiyonu
+create_on_demand_request() {
     local region=$1
     echo "Bölge: $region"
 
@@ -97,23 +97,23 @@ screen -ls
 EOF
     )
 
-    # Spot instance talebi oluştur
-    echo "$region bölgesinde uygun bir tür için spot instance talebi oluşturuluyor..."
+    # On-demand instance talebi oluştur
+    echo "$region bölgesinde uygun bir tür için on-demand instance talebi oluşturuluyor..."
 
-    instance_id=$(aws ec2 run-instances         --region "$region"         --image-id "$ami_id"         --instance-type "$instance_type"         --security-group-ids "$security_group_id"         --subnet-id "$subnet_id"         --instance-market-options '{"MarketType":"spot"}'         --user-data "$user_data"         --count 1         --query 'Instances[0].InstanceId' --output text)
+    instance_id=$(aws ec2 run-instances         --region "$region"         --image-id "$ami_id"         --instance-type "$instance_type"         --security-group-ids "$security_group_id"         --subnet-id "$subnet_id"         --user-data "$user_data"         --count 1         --query 'Instances[0].InstanceId' --output text)
 
     if [ -n "$instance_id" ]; then
-        echo "Spot instance talebi başarılı: $instance_id"
+        echo "On-demand instance talebi başarılı: $instance_id"
         success_regions+=("$region:$instance_type")
     else
-        echo "Spot instance talebi başarısız."
+        echo "On-demand instance talebi başarısız."
         failed_regions+=("$region")
     fi
 }
 
-# Tüm bölgeler için spot instance talepleri
+# Tüm bölgeler için on-demand instance talepleri
 for region in "${regions[@]}"; do
-    create_spot_request "$region"
+    create_on_demand_request "$region"
 done
 
 # Sonuçları yazdırma
