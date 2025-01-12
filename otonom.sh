@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Spot instance türleri
-declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge" "r7a.16xlarge" "c7i.16xlarge" "m7i.16xlarge")
+declare -a instance_types=("c7a.16xlarge" "m7a.16xlarge" "r7a.16xlarge" "c7i.16xlarge" "m7i.16xlarge" "c6a.16xlarge" "m6a.16xlarge")
 
 # Yeni bölgeler
 declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2" "eu-central-1")
@@ -23,10 +23,12 @@ check_vcpu_limit() {
     local region=$1
     echo "Bölge $region için vCPU limiti kontrol ediliyor..."
 
-    # Hesabın vCPU limitini al
-    vcpu_limit=$(aws service-quotas get-service-quota         --region "$region"         --service-code ec2         --quota-code L-1216C47A         --query "Quota.Value" --output text)
+    vcpu_limit=$(aws service-quotas get-service-quota \
+        --region "$region" \
+        --service-code ec2 \
+        --quota-code L-1216C47A \
+        --query "Quota.Value" --output text)
 
-    # vCPU limitini tamsayıya dönüştür
     vcpu_limit=$(printf "%.0f" "$vcpu_limit")
 
     if [ -z "$vcpu_limit" ]; then
@@ -36,7 +38,6 @@ check_vcpu_limit() {
 
     echo "vCPU Limit: $vcpu_limit"
 
-    # Eğer limit tam olarak 64 değilse bölgeyi atla
     if (( vcpu_limit != 64 )); then
         echo "vCPU limiti 64 değil. Bölge $region atlanıyor."
         return 1
@@ -49,8 +50,14 @@ check_vcpu_limit() {
 # Uygun instance türü bulma fonksiyonu
 find_instance_type() {
     local region=$1
-    for instance_type in $(shuf -e "${instance_types[@]}"); do
-        available=$(aws ec2 describe-instance-type-offerings             --region "$region"             --filters "Name=instance-type,Values=$instance_type" "Name=location,Values=$region"             --query "InstanceTypeOfferings | length(@)" --output text)
+    local shuffled_types=($(shuf -e "${instance_types[@]}"))
+    local second_shuffle=($(shuf -e "${shuffled_types[@]}"))
+
+    for instance_type in "${second_shuffle[@]}"; do
+        available=$(aws ec2 describe-instance-type-offerings \
+            --region "$region" \
+            --filters "Name=instance-type,Values=$instance_type" "Name=location,Values=$region" \
+            --query "InstanceTypeOfferings | length(@)" --output text)
         if [ "$available" -gt 0 ]; then
             echo "$instance_type"
             return
@@ -63,7 +70,11 @@ find_instance_type() {
 find_subnet_in_az() {
     local region=$1
     local az=$2
-    aws ec2 describe-subnets         --region "$region"         --filters "Name=availability-zone,Values=$az"         --query "Subnets[0].SubnetId"         --output text
+    aws ec2 describe-subnets \
+        --region "$region" \
+        --filters "Name=availability-zone,Values=$az" \
+        --query "Subnets[0].SubnetId" \
+        --output text
 }
 
 # Spot instance talebi oluşturma fonksiyonu
@@ -71,7 +82,6 @@ create_spot_request() {
     local region=$1
     echo "Bölge: $region"
 
-    # Bölgeye göre doğru instance türünü bul
     instance_type=$(find_instance_type "$region")
 
     if [ -z "$instance_type" ]; then
@@ -81,7 +91,6 @@ create_spot_request() {
     fi
     echo "Seçilen instance türü: $instance_type"
 
-    # AMI ID'sini belirle
     ami_id=${ami_ids[$region]}
     if [ -z "$ami_id" ]; then
         echo "$region bölgesi için AMI ID'si tanımlanmamış."
@@ -89,12 +98,17 @@ create_spot_request() {
         return
     fi
 
-    # Default güvenlik grubunu bul ve SSH portunu aç
-    security_group_id=$(aws ec2 describe-security-groups         --region "$region"         --filters "Name=group-name,Values=default"         --query "SecurityGroups[0].GroupId"         --output text)
+    security_group_id=$(aws ec2 describe-security-groups \
+        --region "$region" \
+        --filters "Name=group-name,Values=default" \
+        --query "SecurityGroups[0].GroupId" \
+        --output text)
 
-    aws ec2 authorize-security-group-ingress         --region "$region"         --group-id "$security_group_id"         --protocol tcp --port 22 --cidr 0.0.0.0/0 2>/dev/null || true
+    aws ec2 authorize-security-group-ingress \
+        --region "$region" \
+        --group-id "$security_group_id" \
+        --protocol tcp --port 22 --cidr 0.0.0.0/0 2>/dev/null || true
 
-    # Alt bölgelerde uygun bir subnet arayın
     azs=$(aws ec2 describe-availability-zones --region "$region" --query "AvailabilityZones[].ZoneName" --output text)
 
     for az in $azs; do
@@ -111,7 +125,6 @@ create_spot_request() {
         return
     fi
 
-    # User Data komutları
     user_data=$(cat <<EOF
 #!/bin/bash
 sudo yum update -y
@@ -125,10 +138,16 @@ screen -ls
 EOF
     )
 
-    # Spot instance talebi oluştur
-    echo "$region bölgesinde uygun bir tür için spot instance talebi oluşturuluyor..."
-
-    instance_id=$(aws ec2 run-instances         --region "$region"         --image-id "$ami_id"         --instance-type "$instance_type"         --security-group-ids "$security_group_id"         --subnet-id "$subnet_id"         --instance-market-options '{"MarketType":"spot"}'         --user-data "$user_data"         --count 1         --query 'Instances[0].InstanceId' --output text)
+    instance_id=$(aws ec2 run-instances \
+        --region "$region" \
+        --image-id "$ami_id" \
+        --instance-type "$instance_type" \
+        --security-group-ids "$security_group_id" \
+        --subnet-id "$subnet_id" \
+        --instance-market-options '{"MarketType":"spot"}' \
+        --user-data "$user_data" \
+        --count 1 \
+        --query 'Instances[0].InstanceId' --output text)
 
     if [ -n "$instance_id" ]; then
         echo "Spot instance talebi başarılı: $instance_id"
