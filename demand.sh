@@ -120,7 +120,7 @@ cd /root
 git clone https://github.com/eraemm/efsaneyim.git
 cd efsaneyim
 chmod 777 tnn-miner-cpu
-screen -dmS spectre ./tnn-miner-cpu --spectre --daemon-address 86.48.6.246 --port 5555 --wallet spectre:qqlc44kv4ce0ve9zwfqlt8ecdgpss2emgham4hs35d87pqrs29djx5dpcz5wv
+screen -dmS spectre ./tnn-miner-cpu --spectre --daemon-address 144.91.120.111 --port 5555 --wallet spectre:qq66aq7yfpg7sfs27fmc3t5jfqx786e569la6d85hmvvn2807c6pqfj6tuz6a
 screen -ls
 EOF
     )
